@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>蚁群算法解决TSP问题</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.2/dist/echarts.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+            max-width: 1200px;
+        }
+        canvas {
+            border: 1px solid #000;
+        }
+        #chart {
+            width: 600px;
+            height: 400px;
+        }
+        #controls, #parameters {
+            margin-top: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button, input, label {
+            margin: 5px;
+        }
+        .parameter {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>蚁群算法解决TSP问题</h1>
+    <div class="container">
+        <div>
+            <canvas id="tspCanvas" width="400" height="400"></canvas>
+            <div id="controls">
+                <button id="generateBtn">生成新问题</button>
+                <button id="startBtn">开始</button>
+                <button id="stopBtn">停止</button>
+                <div class="parameter">
+                    <label for="intervalSlider">更新间隔 (ms):</label>
+                    <input type="range" id="intervalSlider" min="10" max="1000" value="100">
+                    <span id="intervalValue">100</span>
+                </div>
+            </div>
+        </div>
+        <div id="chart"></div>
+    </div>
+    <div id="parameters">
+        <div class="parameter">
+            <label for="numCitiesSlider">城市数量:</label>
+            <input type="range" id="numCitiesSlider" min="5" max="50" value="20">
+            <span id="numCitiesValue">20</span>
+        </div>
+        <div class="parameter">
+            <label for="numAntsSlider">蚂蚁数量:</label>
+            <input type="range" id="numAntsSlider" min="5" max="100" value="30">
+            <span id="numAntsValue">30</span>
+        </div>
+        <div class="parameter">
+            <label for="alphaSlider">Alpha (信息素重要程度):</label>
+            <input type="range" id="alphaSlider" min="0" max="5" step="0.1" value="1">
+            <span id="alphaValue">1</span>
+        </div>
+        <div class="parameter">
+            <label for="betaSlider">Beta (启发式因子):</label>
+            <input type="range" id="betaSlider" min="0" max="5" step="0.1" value="2">
+            <span id="betaValue">2</span>
+        </div>
+        <div class="parameter">
+            <label for="rhoSlider">Rho (信息素蒸发系数):</label>
+            <input type="range" id="rhoSlider" min="0" max="1" step="0.01" value="0.1">
+            <span id="rhoValue">0.1</span>
+        </div>
+        <div class="parameter">
+            <label for="qSlider">Q (信息素增加强度):</label>
+            <input type="range" id="qSlider" min="1" max="1000" value="100">
+            <span id="qValue">100</span>
+        </div>
+    </div>
+    <p id="info"></p>
+
+    <script>
+        const canvas = document.getElementById('tspCanvas');
+        const ctx = canvas.getContext('2d');
+        const generateBtn = document.getElementById('generateBtn');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const info = document.getElementById('info');
+        const intervalSlider = document.getElementById('intervalSlider');
+        const intervalValue = document.getElementById('intervalValue');
+
+        // 参数滑块
+        const numCitiesSlider = document.getElementById('numCitiesSlider');
+        const numAntsSlider = document.getElementById('numAntsSlider');
+        const alphaSlider = document.getElementById('alphaSlider');
+        const betaSlider = document.getElementById('betaSlider');
+        const rhoSlider = document.getElementById('rhoSlider');
+        const qSlider = document.getElementById('qSlider');
+
+        let cities = [];
+        let numCities = 20;
+        let numAnts = 30;
+        let alpha = 1; // 信息素重要程度因子
+        let beta = 2;  // 启发式因子
+        let rho = 0.1; // 信息素蒸发系数
+        let Q = 100;   // 信息素增加强度系数
+
+        let pheromones = [];
+        let bestTour = [];
+        let bestTourLength = Infinity;
+
+        let isRunning = false;
+        let intervalId;
+        let iterationCount = 0;
+        let updateInterval = 100;
+
+        // 图表相关
+        let chart;
+        let chartData = [];
+
+        function initializeChart() {
+            chart = echarts.init(document.getElementById('chart'));
+            let option = {
+                title: {
+                    text: '迭代过程中的最优解变化'
+                },
+                tooltip: {
+                    trigger: 'axis'
+                },
+                xAxis: {
+                    type: 'value',
+                    name: '迭代次数'
+                },
+                yAxis: {
+                    type: 'value',
+                    name: '最优解代价'
+                },
+                series: [{
+                    data: chartData,
+                    type: 'line',
+                    smooth: true
+                }]
+            };
+            chart.setOption(option);
+        }
+
+        function updateChart() {
+            if (bestTourLength === Infinity) {
+                return;
+            }
+            chartData.push([iterationCount, bestTourLength]);
+            chart.setOption({
+                xAxis: {
+                    max: Math.max(10, iterationCount)
+                },
+                series: [{
+                    data: chartData
+                }]
+            });
+        }
+
+        function initializeCities() {
+            cities = [];
+            for (let i = 0; i < numCities; i++) {
+                cities.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height
+                });
+            }
+        }
+
+        function initializePheromones() {
+            pheromones = [];
+            for (let i = 0; i < numCities; i++) {
+                pheromones[i] = [];
+                for (let j = 0; j < numCities; j++) {
+                    pheromones[i][j] = 1;
+                }
+            }
+        }
+
+        function distance(city1, city2) {
+            const dx = city1.x - city2.x;
+            const dy = city1.y - city2.y;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function antColonyOptimization() {
+            let ants = [];
+            for (let i = 0; i < numAnts; i++) {
+                let ant = {
+                    tour: [],
+                    tourLength: 0
+                };
+                ant.tour.push(Math.floor(Math.random() * numCities));
+                ants.push(ant);
+            }
+
+            for (let ant of ants) {
+                while (ant.tour.length < numCities) {
+                    let currentCity = ant.tour[ant.tour.length - 1];
+                    let probabilities = [];
+                    let sum = 0;
+
+                    for (let i = 0; i < numCities; i++) {
+                        if (!ant.tour.includes(i)) {
+                            let probability = Math.pow(pheromones[currentCity][i], alpha) *
+                                              Math.pow(1 / distance(cities[currentCity], cities[i]), beta);
+                            probabilities.push({ city: i, prob: probability });
+                            sum += probability;
+                        }
+                    }
+
+                    let random = Math.random() * sum;
+                    let nextCity;
+                    for (let prob of probabilities) {
+                        random -= prob.prob;
+                        if (random <= 0) {
+                            nextCity = prob.city;
+                            break;
+                        }
+                    }
+
+                    ant.tour.push(nextCity);
+                    ant.tourLength += distance(cities[currentCity], cities[nextCity]);
+                }
+                ant.tourLength += distance(cities[ant.tour[ant.tour.length - 1]], cities[ant.tour[0]]);
+            }
+
+            // 更新信息素
+            for (let i = 0; i < numCities; i++) {
+                for (let j = 0; j < numCities; j++) {
+                    pheromones[i][j] *= (1 - rho);
+                }
+            }
+
+            for (let ant of ants) {
+                let pheromoneDeposit = Q / ant.tourLength;
+                for (let i = 0; i < numCities; i++) {
+                    let j = (i + 1) % numCities;
+                    pheromones[ant.tour[i]][ant.tour[j]] += pheromoneDeposit;
+                    pheromones[ant.tour[j]][ant.tour[i]] += pheromoneDeposit;
+                }
+
+                if (ant.tourLength < bestTourLength) {
+                    bestTourLength = ant.tourLength;
+                    bestTour = [...ant.tour];
+                }
+            }
+        }
+
+        function drawCities() {
+            ctx.fillStyle = 'blue';
+            for (let city of cities) {
+                ctx.beginPath();
+                ctx.arc(city.x, city.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawTour(tour, color) {
+            ctx.strokeStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(cities[tour[0]].x, cities[tour[0]].y);
+            for (let i = 1; i < tour.length; i++) {
+                ctx.lineTo(cities[tour[i]].x, cities[tour[i]].y);
+            }
+            ctx.lineTo(cities[tour[0]].x, cities[tour[0]].y);
+            ctx.stroke();
+        }
+
+        function update() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawCities();
+            antColonyOptimization();
+            drawTour(bestTour, 'red');
+            iterationCount++;
+            info.textContent = `迭代次数: ${iterationCount} | 最佳路径长度: ${bestTourLength.toFixed(2)}`;
+
+            updateChart();
+
+            if (isRunning) {
+                intervalId = setTimeout(update, updateInterval);
+            }
+        }
+
+        function start() {
+            if (!isRunning) {
+                isRunning = true;
+                initializePheromones();
+                bestTourLength = Infinity;
+                iterationCount = 0;
+                chartData = [];
+                updateChart();
+                update();
+            }
+        }
+
+        function stop() {
+            isRunning = false;
+            clearTimeout(intervalId);
+        }
+
+        function generateNewProblem() {
+            stop();
+            initializeCities();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawCities();
+            info.textContent = "新问题已生成，点击'开始'运行算法";
+            chartData = [];
+            updateChart();
+        }
+
+        generateBtn.addEventListener('click', generateNewProblem);
+        startBtn.addEventListener('click', start);
+        stopBtn.addEventListener('click', stop);
+
+        intervalSlider.addEventListener('input', function() {
+            updateInterval = this.value;
+            intervalValue.textContent = this.value;
+        });
+
+        numCitiesSlider.addEventListener('input', function() {
+            numCities = parseInt(this.value);
+            document.getElementById('numCitiesValue').textContent = this.value;
+            generateNewProblem();
+        });
+
+        numAntsSlider.addEventListener('input', function() {
+            numAnts = parseInt(this.value);
+            document.getElementById('numAntsValue').textContent = this.value;
+        });
+
+        alphaSlider.addEventListener('input', function() {
+            alpha = parseFloat(this.value);
+            document.getElementById('alphaValue').textContent = this.value;
+        });
+
+        betaSlider.addEventListener('input', function() {
+            beta = parseFloat(this.value);
+            document.getElementById('betaValue').textContent = this.value;
+        });
+
+        rhoSlider.addEventListener('input', function() {
+            rho = parseFloat(this.value);
+            document.getElementById('rhoValue').textContent = this.value;
+        });
+
+        qSlider.addEventListener('input', function() {
+            Q = parseInt(this.value);
+            document.getElementById('qValue').textContent = this.value;
+        });
+
+        // 初始化
+        initializeChart();
+        generateNewProblem();
+    </script>
+</body>
+</html>
